@@ -18,6 +18,13 @@ DMG="CC-Usage.dmg"
 echo "▸ Staging…"
 STAGING="$(mktemp -d)"
 cp -R "$APP" "$STAGING/"
+# cp / iCloud Drive re-stamp com.apple.FinderInfo (and .DS_Store) onto the copy,
+# which invalidates the signature ("Disallowed xattr com.apple.FinderInfo").
+# Strip them from the staged copy so the shipped app verifies. Signature bytes
+# live in _CodeSignature/the Mach-O, so this restores — doesn't break — validity.
+xattr -cr "$STAGING/$APP"
+find "$STAGING/$APP" -name .DS_Store -delete
+codesign --verify --strict "$STAGING/$APP" || { echo "✗ staged app signature invalid" >&2; exit 1; }
 ln -s /Applications "$STAGING/Applications"   # drag target
 
 echo "▸ Creating ${DMG}…"

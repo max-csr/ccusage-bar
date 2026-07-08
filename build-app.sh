@@ -26,9 +26,16 @@ cp Resources/Info.plist "$APP/Contents/Info.plist"
 [[ -f Resources/AppIcon.icns ]] && cp Resources/AppIcon.icns "$APP/Contents/Resources/"
 
 echo "▸ Ad-hoc codesigning (stable identifier ${BUNDLE_ID})…"
+# iCloud Drive / Finder stamp com.apple.FinderInfo/provenance/fileprovider xattrs
+# and drop .DS_Store files; codesign then refuses with "resource fork, Finder
+# information, or similar detritus not allowed". Strip them right before signing.
+xattr -cr "$APP"
+find "$APP" -name .DS_Store -delete
 # Stable --identifier keeps the Keychain "Always Allow" ACL across rebuilds
 # and is required for SMAppService launch-at-login to work on an unsigned-for-distribution app.
 codesign --force --sign - --identifier "$BUNDLE_ID" "$APP"
+# Fail loudly if the signature didn't take (don't ship an unsigned bundle).
+codesign --verify --strict "$APP" || { echo "✗ codesign verification failed" >&2; exit 1; }
 codesign -dv "$APP" 2>&1 | sed 's/^/    /' || true
 
 echo ""
