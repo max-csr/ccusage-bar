@@ -32,7 +32,7 @@ final class UsagePoller: ObservableObject {
 
     func start() {
         let timer = Timer.scheduledTimer(withTimeInterval: pollInterval, repeats: true) { [weak self] _ in
-            Task { @MainActor in self?.poll() }
+            Task { @MainActor [weak self] in self?.poll() }
         }
         timer.tolerance = 30
         pollTimer = timer
@@ -40,7 +40,7 @@ final class UsagePoller: ObservableObject {
         NSWorkspace.shared.notificationCenter.addObserver(
             forName: NSWorkspace.didWakeNotification, object: nil, queue: .main
         ) { [weak self] _ in
-            Task { @MainActor in self?.poll(force: true) }
+            Task { @MainActor [weak self] in self?.poll(force: true) }
         }
 
         poll()

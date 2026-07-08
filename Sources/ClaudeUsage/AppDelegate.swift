@@ -73,7 +73,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Check GitHub for a newer release at launch, then once a day.
         performUpdateCheck()
         let timer = Timer.scheduledTimer(withTimeInterval: 86_400, repeats: true) { [weak self] _ in
-            Task { @MainActor in self?.performUpdateCheck() }
+            Task { @MainActor [weak self] in self?.performUpdateCheck() }
         }
         timer.tolerance = 3_600
         updateTimer = timer
