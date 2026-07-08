@@ -12,6 +12,7 @@ reached" never catches you mid‑task.
 
 - A live **usage ring + %** in the menu bar — green when you've got room, shading to red as it fills.
 - A click‑away panel with your **5‑hour session**, **weekly limits**, and exact **reset countdowns**.
+- **Usage notifications** — a heads‑up when your session or weekly usage crosses a level you choose (default 90%), or when your 5‑hour session is burning down unusually fast. Both optional.
 - **Launch at login**, one‑click **refresh**, and a built‑in **check for updates**.
 - Tiny and native — about 17 MB, one process, no Electron.
 
@@ -35,8 +36,21 @@ one running low, it automatically switches to show that instead (marked `W`).
 ## Using it
 
 - **Click the ring** for the full breakdown — both windows, their percentages, and
-  live "resets in…" countdowns.
-- Open **Settings…** to turn on **Launch at login** or **Check for Updates**.
+  live "resets in…" countdowns. Click again or press **Esc** to dismiss.
+- Open **Settings…** to turn on **Launch at login**, adjust your **notification
+  thresholds**, or **Check for Updates**.
+
+### Notifications
+
+So a limit never catches you mid‑task, CC Usage can alert you:
+
+- **Threshold alerts** — fire once when your **session** or **weekly** usage reaches a
+  level you set (default 90%, adjustable from 50–99% with a slider).
+- **Rapid‑usage alerts** — a heads‑up when your 5‑hour session is being used up
+  unusually fast, well before you hit the wall.
+
+Both are on by default; toggle either in **Settings…**. macOS asks for notification
+permission the first time — click **Allow**.
 
 ## Your privacy
 
