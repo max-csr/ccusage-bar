@@ -91,6 +91,8 @@ enum SelfTest {
             try check(UpdateChecker.isNewer("2.0.0", than: "1.9.9"), "2.0.0 > 1.9.9")
             try check(!UpdateChecker.isNewer("1.0.0", than: "1.1.0"), "older is not newer")
 
+            try checkAlertEngine()
+
             print("selftest: PASS")
             print("  5h=\(r.fiveHour!.utilization!)%  resets \(r.fiveHour!.resetsAt!)")
             print("  7d=\(r.sevenDay!.utilization!)%  resets \(r.sevenDay!.resetsAt!)")
@@ -104,6 +106,134 @@ enum SelfTest {
     struct CheckError: Error { let message: String }
     static func check(_ condition: Bool, _ message: String) throws {
         if !condition { throw CheckError(message: message) }
+    }
+
+    // MARK: - Notification AlertEngine (pure logic)
+
+    static func checkAlertEngine() throws {
+        let base = Date(timeIntervalSince1970: 1_700_000_000)
+        let allOn = NotificationSettings(thresholdEnabled: true, thresholdPercent: 90, burnRateEnabled: true)
+
+        func snap(_ session: Double?, _ weekly: Double? = nil, at offset: TimeInterval,
+                  sessionReset: Date? = nil, weeklyReset: Date? = nil,
+                  status: UsageStatus = .ok) -> UsageSnapshot {
+            UsageSnapshot(sessionPercent: session, sessionResetsAt: sessionReset,
+                          weeklyPercent: weekly, weeklyResetsAt: weeklyReset,
+                          status: status, lastUpdated: base.addingTimeInterval(offset))
+        }
+
+        // Threshold: fires once at the crossing, then latches.
+        var e1 = AlertEngine()
+        _ = e1.evaluate(snap(70, at: 0), allOn)
+        _ = e1.evaluate(snap(85, at: 180), allOn)
+        try check(e1.evaluate(snap(92, at: 360), allOn) == [.threshold(.session, percent: 92)],
+                  "threshold fires once at crossing")
+        try check(e1.evaluate(snap(95, at: 540), allOn).isEmpty, "threshold latches (no refire)")
+
+        // Jitter around the threshold fires at most once.
+        var e2 = AlertEngine()
+        _ = e2.evaluate(snap(88, at: 0), allOn)
+        try check(e2.evaluate(snap(91, at: 180), allOn) == [.threshold(.session, percent: 91)], "jitter: fire at 91")
+        _ = e2.evaluate(snap(89, at: 360), allOn)
+        try check(e2.evaluate(snap(92, at: 540), allOn).isEmpty, "jitter: 89 does not re-arm")
+
+        // Re-arms after a genuine window reset (percent collapse + advanced resets_at).
+        var e3 = AlertEngine()
+        let r0 = base.addingTimeInterval(5 * 3600), r1 = base.addingTimeInterval(10 * 3600)
+        _ = e3.evaluate(snap(70, at: 0, sessionReset: r0), allOn)
+        let c1 = e3.evaluate(snap(92, at: 180, sessionReset: r0), allOn)
+        _ = e3.evaluate(snap(3, at: 360, sessionReset: r1), allOn)   // reset
+        let c2 = e3.evaluate(snap(91, at: 540, sessionReset: r1), allOn)
+        try check(c1 == [.threshold(.session, percent: 92)] && c2 == [.threshold(.session, percent: 91)],
+                  "re-arms after window reset")
+
+        // Already above threshold on first sight → suppressed until a reset.
+        var e4 = AlertEngine()
+        let s0 = base.addingTimeInterval(5 * 3600), s1 = base.addingTimeInterval(10 * 3600)
+        try check(e4.evaluate(snap(95, at: 0, sessionReset: s0), allOn).isEmpty, "seed-above: no fire at seed")
+        try check(e4.evaluate(snap(96, at: 180, sessionReset: s0), allOn).isEmpty, "seed-above: still no fire")
+        _ = e4.evaluate(snap(5, at: 360, sessionReset: s1), allOn)
+        try check(e4.evaluate(snap(92, at: 540, sessionReset: s1), allOn) == [.threshold(.session, percent: 92)],
+                  "seed-above: fires after reset + re-cross")
+
+        // Stale/error re-emit is ignored.
+        var e5 = AlertEngine()
+        try check(e5.evaluate(snap(99, at: 0, status: .offline), allOn).isEmpty, "stale/error snapshot ignored")
+
+        // Dedup by lastUpdated.
+        var e6 = AlertEngine()
+        _ = e6.evaluate(snap(70, at: 0), allOn)
+        let d1 = e6.evaluate(snap(92, at: 180), allOn)
+        let d2 = e6.evaluate(snap(92, at: 180), allOn)   // same lastUpdated
+        try check(d1 == [.threshold(.session, percent: 92)] && d2.isEmpty, "dedup by lastUpdated")
+
+        // Lowering the threshold below current usage does not retro-fire.
+        var e7 = AlertEngine()
+        _ = e7.evaluate(snap(70, at: 0), allOn)
+        _ = e7.evaluate(snap(80, at: 180), allOn)
+        let lowered = NotificationSettings(thresholdEnabled: true, thresholdPercent: 75, burnRateEnabled: true)
+        try check(e7.evaluate(snap(82, at: 360), lowered).isEmpty, "runtime threshold lowered: no retro-fire")
+
+        // Session and weekly can both cross in one tick.
+        var e8 = AlertEngine()
+        _ = e8.evaluate(snap(70, 80, at: 0), allOn)
+        let both = e8.evaluate(snap(92, 95, at: 180), allOn)
+        try check(both.count == 2
+                  && both.contains(.threshold(.session, percent: 92))
+                  && both.contains(.threshold(.weekly, percent: 95)), "session + weekly cross together")
+
+        // Burn-rate fires on a rapid session rise.
+        var b1 = AlertEngine()
+        _ = b1.evaluate(snap(50, at: 0), allOn)
+        _ = b1.evaluate(snap(54, at: 180), allOn)
+        try check(b1.evaluate(snap(58, at: 360), allOn) == [.burnRate(percent: 58)], "burn-rate fires on rapid rise")
+
+        // Slow rise never fires.
+        var b2 = AlertEngine()
+        _ = b2.evaluate(snap(50, at: 0), allOn)
+        _ = b2.evaluate(snap(52, at: 180), allOn)
+        _ = b2.evaluate(snap(54, at: 360), allOn)
+        try check(b2.evaluate(snap(56, at: 540), allOn).isEmpty, "slow rise does not fire burn-rate")
+
+        // Needs ≥3 samples: a lone 2-sample jump does not fire.
+        var b3 = AlertEngine()
+        _ = b3.evaluate(snap(50, at: 0), allOn)
+        try check(b3.evaluate(snap(62, at: 180), allOn).isEmpty, "burn-rate needs ≥3 samples")
+
+        // Rise across a sleep/outage gap is ignored.
+        var b4 = AlertEngine()
+        _ = b4.evaluate(snap(50, at: 0), allOn)
+        _ = b4.evaluate(snap(53, at: 180), allOn)
+        try check(b4.evaluate(snap(80, at: 7200), allOn).isEmpty, "burn-rate ignores rise across sleep gap")
+
+        // At/above threshold: threshold alert only, no duplicate burn.
+        var b5 = AlertEngine()
+        _ = b5.evaluate(snap(85, at: 0), allOn)
+        _ = b5.evaluate(snap(88, at: 180), allOn)
+        try check(b5.evaluate(snap(93, at: 360), allOn) == [.threshold(.session, percent: 93)],
+                  "burn suppressed when at/above threshold")
+
+        // Cooldown caps a sustained burn to one alert per 30 min.
+        var b6 = AlertEngine()
+        _ = b6.evaluate(snap(40, at: 0), allOn)
+        _ = b6.evaluate(snap(48, at: 180), allOn)
+        let f = b6.evaluate(snap(56, at: 360), allOn)
+        let g = b6.evaluate(snap(64, at: 540), allOn)
+        try check(f == [.burnRate(percent: 56)] && g.isEmpty, "burn-rate respects cooldown")
+
+        // nil percent is skipped, not treated as 0.
+        var b7 = AlertEngine()
+        _ = b7.evaluate(snap(50, at: 0), allOn)
+        _ = b7.evaluate(snap(nil, at: 180), allOn)
+        let h1 = b7.evaluate(snap(58, at: 360), allOn)
+        let h2 = b7.evaluate(snap(61, at: 540), allOn)
+        try check(h1.isEmpty && h2 == [.burnRate(percent: 61)], "nil percent skipped; fires once span/count met")
+
+        // Weekly surge never triggers burn-rate (session-only).
+        var b8 = AlertEngine()
+        _ = b8.evaluate(snap(10, 50, at: 0), allOn)
+        _ = b8.evaluate(snap(10, 60, at: 180), allOn)
+        try check(b8.evaluate(snap(10, 70, at: 360), allOn).isEmpty, "weekly surge never triggers burn-rate")
     }
 }
 

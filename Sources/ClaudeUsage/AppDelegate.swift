@@ -6,9 +6,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var poller: UsagePoller?
     private var settingsController: SettingsWindowController?
     private var updateTimer: Timer?
+    private var notificationManager: NotificationManager?
     private let popoverModel = PopoverModel()
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        NotificationSettingsStore.registerDefaults()
+
         let client = UsageClient(userAgent: AppDelegate.userAgent())
         let poller = UsagePoller(client: client, pollInterval: 180)
         let statusController = StatusItemController(popoverModel: popoverModel)
@@ -27,9 +30,39 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         popoverModel.onQuit = { NSApp.terminate(nil) }
         popoverModel.launchAtLogin = LoginItem.isEnabled
 
+        // Notification prefs: seed from the store, then round-trip edits through it
+        // (write → re-read authoritative value into the model), mirroring the
+        // launch-at-login toggle above.
+        popoverModel.thresholdEnabled = NotificationSettingsStore.thresholdEnabled
+        popoverModel.thresholdPercent = NotificationSettingsStore.thresholdPercent
+        popoverModel.burnRateEnabled = NotificationSettingsStore.burnRateEnabled
+        popoverModel.onSetThresholdEnabled = { [weak self] enabled in
+            NotificationSettingsStore.thresholdEnabled = enabled
+            self?.popoverModel.thresholdEnabled = NotificationSettingsStore.thresholdEnabled
+        }
+        popoverModel.onSetThreshold = { [weak self] percent in
+            NotificationSettingsStore.thresholdPercent = percent
+            self?.popoverModel.thresholdPercent = NotificationSettingsStore.thresholdPercent
+        }
+        popoverModel.onSetBurnRateEnabled = { [weak self] enabled in
+            NotificationSettingsStore.burnRateEnabled = enabled
+            self?.popoverModel.burnRateEnabled = NotificationSettingsStore.burnRateEnabled
+        }
+
+        // Notifications require a real .app bundle: UNUserNotificationCenter.current()
+        // traps with "bundleProxyForCurrentProcess is nil" in the bare SwiftPM binary
+        // (which is how --selftest/--probe and dev runs execute). bundleIdentifier is
+        // nil there and "com.maxcerisier.ccusagebar" inside the built app.
+        if Bundle.main.bundleIdentifier != nil {
+            let manager = NotificationManager()
+            manager.requestAuthorization()
+            notificationManager = manager
+        }
+
         poller.onUpdate = { [weak self] snapshot in
             self?.statusController?.render(snapshot)
             self?.popoverModel.snapshot = snapshot
+            self?.notificationManager?.handle(snapshot)
         }
 
         self.poller = poller

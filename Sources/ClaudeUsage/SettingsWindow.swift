@@ -19,7 +19,7 @@ final class SettingsWindowController {
             w.title = "CC Usage"
             w.styleMask = [.titled, .closable]
             w.isReleasedWhenClosed = false
-            w.setContentSize(NSSize(width: 340, height: 310))
+            w.setContentSize(NSSize(width: 340, height: 480))
             window = w
         }
         NSApp.activate(ignoringOtherApps: true)
@@ -51,6 +51,41 @@ struct SettingsView: View {
 
             Divider()
 
+            // Notifications
+            VStack(alignment: .leading, spacing: 12) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Toggle("Usage threshold alerts", isOn: Binding(
+                        get: { model.thresholdEnabled },
+                        set: { model.onSetThresholdEnabled?($0) }))
+                        .toggleStyle(.switch)
+                    HStack {
+                        Slider(value: Binding(
+                            get: { model.thresholdPercent },
+                            set: { model.onSetThreshold?($0) }),
+                            in: 50...99, step: 1)
+                        Text("\(Int(model.thresholdPercent))%")
+                            .font(.callout.monospacedDigit())
+                            .foregroundStyle(.secondary)
+                            .frame(width: 44, alignment: .trailing)
+                    }
+                    .disabled(!model.thresholdEnabled)
+                    Text("Notify when session or weekly usage reaches this level.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                VStack(alignment: .leading, spacing: 4) {
+                    Toggle("Rapid usage alerts", isOn: Binding(
+                        get: { model.burnRateEnabled },
+                        set: { model.onSetBurnRateEnabled?($0) }))
+                        .toggleStyle(.switch)
+                    Text("Notify when your 5-hour session is being used up unusually fast.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+
+            Divider()
+
             // Updates
             VStack(alignment: .leading, spacing: 6) {
                 HStack(spacing: 10) {
@@ -75,7 +110,7 @@ struct SettingsView: View {
             }
         }
         .padding(20)
-        .frame(width: 340, height: 310, alignment: .topLeading)
+        .frame(width: 340, height: 480, alignment: .topLeading)
     }
 
     @ViewBuilder
