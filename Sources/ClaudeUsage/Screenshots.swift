@@ -46,7 +46,7 @@ enum Screenshots {
     @ViewBuilder
     static func menuChip() -> some View {
         HStack(spacing: 6) {
-            Image(nsImage: StatusItemController.ringImage(percent: 58, tier: .caution, diameter: 16, lineWidth: 2.2))
+            Image(nsImage: StatusItemController.ringImage(percent: 58, tier: Tier.of(58), diameter: 16, lineWidth: 2.2))
             Text("58%").font(.system(size: 14, weight: .medium).monospacedDigit()).foregroundStyle(.white)
         }
         .padding(.horizontal, 12).padding(.vertical, 6)
@@ -85,7 +85,7 @@ enum Screenshots {
                     Color.black.opacity(0.42)
                     HStack(spacing: 16) {
                         HStack(spacing: 6) {
-                            Image(nsImage: StatusItemController.ringImage(percent: 58, tier: .caution, diameter: 15, lineWidth: 2.0))
+                            Image(nsImage: StatusItemController.ringImage(percent: 58, tier: Tier.of(58), diameter: 15, lineWidth: 2.0))
                             Text("58%").font(.system(size: 13, weight: .medium).monospacedDigit())
                         }
                         Image(systemName: "wifi")

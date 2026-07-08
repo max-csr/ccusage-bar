@@ -32,6 +32,7 @@ final class StatusItemController: NSObject {
     private let panel: KeyablePanel
     private let hosting: NSHostingView<PopoverView>
     private var clickMonitor: Any?
+    private var escMonitor: Any?
 
     init(popoverModel: PopoverModel) {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
@@ -200,12 +201,24 @@ final class StatusItemController: NSObject {
         clickMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] _ in
             Task { @MainActor in self?.hidePanel() }
         }
+
+        // Esc closes the panel. A local monitor sees our own key events (the panel
+        // is key); swallow the Escape (return nil) so it doesn't beep.
+        escMonitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown]) { [weak self] event in
+            guard event.keyCode == 53 else { return event }   // 53 = Escape
+            Task { @MainActor in self?.hidePanel() }
+            return nil
+        }
     }
 
     private func hidePanel() {
         if let monitor = clickMonitor {
             NSEvent.removeMonitor(monitor)
             clickMonitor = nil
+        }
+        if let monitor = escMonitor {
+            NSEvent.removeMonitor(monitor)
+            escMonitor = nil
         }
         panel.orderOut(nil)
     }
