@@ -6,6 +6,9 @@ final class PopoverModel: ObservableObject {
     @Published var launchAtLogin = false
     @Published var update: UpdateInfo?
     @Published var updateCheckState: UpdateCheckState = .idle
+    @Published var thresholdEnabled = true
+    @Published var thresholdPercent: Double = 90
+    @Published var burnRateEnabled = true
 
     var onRefresh: (() -> Void)?
     var onToggleLogin: ((Bool) -> Void)?
@@ -13,6 +16,9 @@ final class PopoverModel: ObservableObject {
     var onOpenUpdate: (() -> Void)?
     var onCheckForUpdates: (() -> Void)?
     var onQuit: (() -> Void)?
+    var onSetThresholdEnabled: ((Bool) -> Void)?
+    var onSetThreshold: ((Double) -> Void)?
+    var onSetBurnRateEnabled: ((Bool) -> Void)?
 }
 
 struct PopoverView: View {
