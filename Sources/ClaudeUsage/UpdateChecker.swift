@@ -29,7 +29,13 @@ enum UpdateChecker {
         req.setValue("CC-Usage", forHTTPHeaderField: "User-Agent")  // GitHub requires a UA
         req.timeoutInterval = 15
 
-        guard let (data, resp) = try? await URLSession.shared.data(for: req),
+        // No shared cache/cookies — matches the ephemeral session used elsewhere.
+        let cfg = URLSessionConfiguration.ephemeral
+        cfg.urlCache = nil
+        cfg.httpCookieStorage = nil
+        let session = URLSession(configuration: cfg)
+
+        guard let (data, resp) = try? await session.data(for: req),
               let http = resp as? HTTPURLResponse, http.statusCode == 200,
               let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let tag = obj["tag_name"] as? String,
