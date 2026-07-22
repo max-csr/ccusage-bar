@@ -55,7 +55,7 @@ enum SelfTest {
         { "kind": "session",    "group": "session", "percent": 24, "resets_at": "2026-06-29T12:49:59.673455+00:00", "is_active": false },
         { "kind": "weekly_all", "group": "weekly",  "percent": 52, "resets_at": "2026-07-01T20:59:59.673479+00:00", "is_active": true }
       ],
-      "extra_usage": { "is_enabled": true, "monthly_limit": 0, "used_credits": 0.0, "currency": "EUR", "decimal_places": 2 },
+      "extra_usage": { "is_enabled": true, "monthly_limit": 25000, "used_credits": 4402.0, "currency": "EUR", "decimal_places": 2 },
       "spend": { "percent": 0, "severity": "normal" }
     }
     """
@@ -76,6 +76,12 @@ enum SelfTest {
 
             let snap = UsageSnapshot.from(r)
             try check(bindingMetric(snap).kind == .session, "binding metric defaults to session (24% vs 52%, neither dangerous)")
+
+            // Extra usage: used_credits is minor units; decimal_places scales it.
+            try check(r.extraUsage?.usedCredits == 4402, "extra_usage.used_credits decoded")
+            try check(r.extraUsage?.decimalPlaces == 2, "extra_usage.decimal_places decoded")
+            try check(abs((snap.extraUsageAmount ?? -1) - 44.02) < 0.001,
+                      "extra usage scaled by decimal_places (4402 credits -> 44.02, not 4402.00)")
 
             // Danger switch: weekly 85% active, session 24% -> show weekly.
             let danger = UsageSnapshot(sessionPercent: 24, weeklyPercent: 85, status: .ok)

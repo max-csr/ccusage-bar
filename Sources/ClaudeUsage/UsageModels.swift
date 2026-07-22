@@ -54,12 +54,16 @@ struct ExtraUsage: Decodable {
     let usedCredits: Double?
     let monthlyLimit: Double?
     let currency: String?
+    // used_credits / monthly_limit are minor units (e.g. cents); decimal_places
+    // says where the point goes: 4402 credits + 2 places -> 44.02 EUR.
+    let decimalPlaces: Int?
 
     enum CodingKeys: String, CodingKey {
         case isEnabled = "is_enabled"
         case usedCredits = "used_credits"
         case monthlyLimit = "monthly_limit"
         case currency
+        case decimalPlaces = "decimal_places"
     }
 }
 
@@ -130,6 +134,7 @@ struct UsageSnapshot {
     var extraUsageEnabled: Bool
     var extraUsageUsedCredits: Double?
     var extraUsageCurrency: String?
+    var extraUsageDecimalPlaces: Int?
     var status: UsageStatus
     var lastUpdated: Date?
 
@@ -144,6 +149,7 @@ struct UsageSnapshot {
          extraUsageEnabled: Bool = false,
          extraUsageUsedCredits: Double? = nil,
          extraUsageCurrency: String? = nil,
+         extraUsageDecimalPlaces: Int? = nil,
          status: UsageStatus,
          lastUpdated: Date? = nil) {
         self.sessionPercent = sessionPercent
@@ -157,6 +163,7 @@ struct UsageSnapshot {
         self.extraUsageEnabled = extraUsageEnabled
         self.extraUsageUsedCredits = extraUsageUsedCredits
         self.extraUsageCurrency = extraUsageCurrency
+        self.extraUsageDecimalPlaces = extraUsageDecimalPlaces
         self.status = status
         self.lastUpdated = lastUpdated
     }
@@ -175,8 +182,20 @@ struct UsageSnapshot {
             extraUsageEnabled: r.extraUsage?.isEnabled ?? false,
             extraUsageUsedCredits: r.extraUsage?.usedCredits,
             extraUsageCurrency: r.extraUsage?.currency,
+            extraUsageDecimalPlaces: r.extraUsage?.decimalPlaces,
             status: status,
             lastUpdated: now)
+    }
+}
+
+extension UsageSnapshot {
+    /// Extra-usage spend in whole currency units. The API reports `used_credits`
+    /// in minor units (e.g. cents) alongside `decimal_places`; 4402 credits at
+    /// 2 places is 44.02 EUR — NOT 4402. Defaults to 2 places when the API omits
+    /// the field (every observed currency response has sent it).
+    var extraUsageAmount: Double? {
+        guard let credits = extraUsageUsedCredits else { return nil }
+        return credits / pow(10.0, Double(extraUsageDecimalPlaces ?? 2))
     }
 }
 

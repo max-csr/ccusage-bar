@@ -122,16 +122,14 @@ struct PopoverView: View {
     }
 
     private var extraUsageText: String {
-        let used = snap.extraUsageUsedCredits ?? 0
-        guard snap.extraUsageEnabled, used > 0 else {
+        let amount = snap.extraUsageAmount ?? 0
+        guard snap.extraUsageEnabled, amount > 0 else {
             return "No extra usage yet this period."
         }
         let currency = snap.extraUsageCurrency ?? ""
-        return "\(formatted(used)) \(currency) used this period.".trimmingCharacters(in: .whitespaces)
-    }
-
-    private func formatted(_ value: Double) -> String {
-        String(format: "%.2f", value)
+        let places = snap.extraUsageDecimalPlaces ?? 2
+        let value = String(format: "%.\(places)f", amount)
+        return "\(value) \(currency) used this period.".trimmingCharacters(in: .whitespaces)
     }
 
     // MARK: - Footer
