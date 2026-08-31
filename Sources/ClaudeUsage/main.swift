@@ -50,10 +50,13 @@ enum SelfTest {
     {
       "five_hour":  { "utilization": 24.0, "resets_at": "2026-06-29T12:49:59.673455+00:00" },
       "seven_day":  { "utilization": 52.0, "resets_at": "2026-07-01T20:59:59.673479+00:00" },
+      "seven_day_opus": null,
       "seven_day_sonnet": { "utilization": 0.0, "resets_at": null },
       "limits": [
         { "kind": "session",    "group": "session", "percent": 24, "resets_at": "2026-06-29T12:49:59.673455+00:00", "is_active": false },
-        { "kind": "weekly_all", "group": "weekly",  "percent": 52, "resets_at": "2026-07-01T20:59:59.673479+00:00", "is_active": true }
+        { "kind": "weekly_all", "group": "weekly",  "percent": 52, "resets_at": "2026-07-01T20:59:59.673479+00:00", "is_active": true },
+        { "kind": "weekly_scoped", "group": "weekly", "percent": 10, "resets_at": "2026-07-01T20:59:59.673479+00:00", "is_active": false,
+          "scope": { "model": { "display_name": "Fable", "id": null }, "surface": null } }
       ],
       "extra_usage": { "is_enabled": true, "monthly_limit": 25000, "used_credits": 4402.0, "currency": "EUR", "decimal_places": 2 },
       "spend": { "percent": 0, "severity": "normal" }
@@ -77,11 +80,25 @@ enum SelfTest {
             let snap = UsageSnapshot.from(r)
             try check(bindingMetric(snap).kind == .session, "binding metric defaults to session (24% vs 52%, neither dangerous)")
 
-            // Extra usage: used_credits is minor units; decimal_places scales it.
+            // Per-model weekly windows come from limits[kind == "weekly_scoped"],
+            // labelled by scope.model.display_name. The flat seven_day_<model> keys
+            // now return null upstream, so this array is the only live source.
+            try check(snap.scopedWeekly.count == 1, "exactly one scoped weekly window")
+            try check(snap.scopedWeekly.first?.name == "Fable", "scoped weekly named from display_name")
+            try check(snap.scopedWeekly.first?.percent == 10, "scoped weekly percent == 10")
+            try check(snap.scopedWeekly.first?.resetsAt != nil, "scoped weekly resets_at parsed")
+            // seven_day_sonnet has a null resets_at -> the window doesn't apply, so
+            // it must not appear as a permanent 0% row.
+            try check(!snap.scopedWeekly.contains { $0.name == "Sonnet" },
+                      "model window with null resets_at is dropped")
+
+            // Extra usage, legacy shape: used_credits is minor units; decimal_places scales it.
             try check(r.extraUsage?.usedCredits == 4402, "extra_usage.used_credits decoded")
             try check(r.extraUsage?.decimalPlaces == 2, "extra_usage.decimal_places decoded")
             try check(abs((snap.extraUsageAmount ?? -1) - 44.02) < 0.001,
                       "extra usage scaled by decimal_places (4402 credits -> 44.02, not 4402.00)")
+
+            try checkSpendMigration()
 
             // Danger switch: weekly 85% active, session 24% -> show weekly.
             let danger = UsageSnapshot(sessionPercent: 24, weeklyPercent: 85, status: .ok)
@@ -109,6 +126,58 @@ enum SelfTest {
         }
     }
 
+    // MARK: - Extra-usage spend: legacy extra_usage -> spend.used
+
+    /// `extra_usage.used_credits` now returns null and the figure lives in
+    /// `spend.used.amount_minor` (+ `exponent`). Both shapes must scale correctly,
+    /// and the amount must never be paired with the *other* shape's exponent.
+    static func checkSpendMigration() throws {
+        func snapshot(_ json: String) throws -> UsageSnapshot {
+            UsageSnapshot.from(try JSONDecoder.usage.decode(UsageResponse.self, from: Data(json.utf8)))
+        }
+
+        // Current shape: extra_usage carries no figure, spend.used does.
+        let modern = try snapshot("""
+        {
+          "extra_usage": { "is_enabled": false, "currency": "EUR", "decimal_places": 2, "used_credits": null },
+          "spend": { "enabled": true, "percent": 12, "used": { "amount_minor": 12345, "currency": "EUR", "exponent": 2 } }
+        }
+        """)
+        try check(abs((modern.extraUsageAmount ?? -1) - 123.45) < 0.001,
+                  "spend.used.amount_minor scaled by its exponent (12345 -> 123.45)")
+        try check(modern.extraUsageCurrency == "EUR", "currency from spend.used")
+        try check(modern.extraUsageEnabled, "spend.enabled drives the enabled flag")
+
+        // Mismatched exponents: the amount must be scaled by its OWN source's
+        // exponent. Taking 990 with the legacy 2 would give 9.90, not 99.0.
+        let mismatched = try snapshot("""
+        {
+          "extra_usage": { "is_enabled": true, "currency": "USD", "decimal_places": 2, "used_credits": 4402 },
+          "spend": { "enabled": true, "used": { "amount_minor": 990, "currency": "GBP", "exponent": 1 } }
+        }
+        """)
+        try check(abs((mismatched.extraUsageAmount ?? -1) - 99.0) < 0.001,
+                  "spend wins and uses its own exponent (990 @ exp 1 -> 99.0, not 9.90)")
+        try check(mismatched.extraUsageCurrency == "GBP", "currency follows the winning source")
+
+        // spend present but carrying no figure -> fall back to the legacy fields.
+        let fallback = try snapshot("""
+        {
+          "extra_usage": { "is_enabled": true, "currency": "EUR", "decimal_places": 2, "used_credits": 4402 },
+          "spend": { "enabled": true, "percent": 0, "used": { "amount_minor": null, "exponent": 2 } }
+        }
+        """)
+        try check(abs((fallback.extraUsageAmount ?? -1) - 44.02) < 0.001,
+                  "null spend.used.amount_minor falls back to extra_usage")
+
+        // Neither source reports a figure -> nil, not 0.
+        let empty = try snapshot("""
+        { "extra_usage": { "is_enabled": false, "used_credits": null }, "spend": { "enabled": false, "used": null } }
+        """)
+        try check(empty.extraUsageAmount == nil, "no figure anywhere -> nil, not 0")
+        try check(!empty.extraUsageEnabled, "spend.enabled false -> disabled")
+    }
+
     struct CheckError: Error { let message: String }
     static func check(_ condition: Bool, _ message: String) throws {
         if !condition { throw CheckError(message: message) }
@@ -122,10 +191,16 @@ enum SelfTest {
 
         func snap(_ session: Double?, _ weekly: Double? = nil, at offset: TimeInterval,
                   sessionReset: Date? = nil, weeklyReset: Date? = nil,
+                  scoped: [ScopedWeekly] = [],
                   status: UsageStatus = .ok) -> UsageSnapshot {
             UsageSnapshot(sessionPercent: session, sessionResetsAt: sessionReset,
                           weeklyPercent: weekly, weeklyResetsAt: weeklyReset,
+                          scopedWeekly: scoped,
                           status: status, lastUpdated: base.addingTimeInterval(offset))
+        }
+
+        func fable(_ percent: Double, reset: Date? = nil) -> [ScopedWeekly] {
+            [ScopedWeekly(name: "Fable", percent: percent, resetsAt: reset)]
         }
 
         // Threshold: fires once at the crossing, then latches.
@@ -187,6 +262,32 @@ enum SelfTest {
         try check(both.count == 2
                   && both.contains(.threshold(.session, percent: 92))
                   && both.contains(.threshold(.weekly, percent: 95)), "session + weekly cross together")
+
+        // A per-model weekly window latches on its own, independently of the others.
+        var e9 = AlertEngine()
+        _ = e9.evaluate(snap(10, 20, at: 0, scoped: fable(70)), allOn)
+        try check(e9.evaluate(snap(10, 20, at: 180, scoped: fable(93)), allOn)
+                  == [.threshold(.scoped("Fable"), percent: 93)], "scoped weekly crosses on its own")
+        try check(e9.evaluate(snap(10, 20, at: 360, scoped: fable(95)), allOn).isEmpty,
+                  "scoped weekly latches (no refire)")
+
+        // Two models latch separately rather than sharing one gate.
+        var e10 = AlertEngine()
+        let two = { (f: Double, o: Double) in
+            [ScopedWeekly(name: "Fable", percent: f, resetsAt: nil),
+             ScopedWeekly(name: "Opus", percent: o, resetsAt: nil)]
+        }
+        _ = e10.evaluate(snap(10, 20, at: 0, scoped: two(70, 70)), allOn)
+        try check(e10.evaluate(snap(10, 20, at: 180, scoped: two(93, 70)), allOn)
+                  == [.threshold(.scoped("Fable"), percent: 93)], "only the crossing model fires")
+        try check(e10.evaluate(snap(10, 20, at: 360, scoped: two(94, 91)), allOn)
+                  == [.threshold(.scoped("Opus"), percent: 91)], "second model fires later, first stays latched")
+
+        // Distinct notification ids so one model's alert can't replace another's.
+        try check(BarKind.scoped("Fable").label != BarKind.scoped("Opus").label,
+                  "scoped labels are distinct per model")
+        try check(BarKind.scoped("Fable").label != BarKind.weekly.label,
+                  "scoped label distinct from the all-models weekly label")
 
         // Burn-rate fires on a rapid session rise.
         var b1 = AlertEngine()
@@ -269,6 +370,20 @@ enum Probe {
         print("keychain: ok — token \(prefix)… (len \(creds.accessToken.count)), refresh \(refresh), expiresAt \(expires)")
 
         let client = UsageClient(userAgent: AppDelegate.userAgent())
+
+        // --probe --raw: dump the undecoded body and stop. Use this to find the real
+        // key for a window we don't model yet — decoding would hide it.
+        if CommandLine.arguments.contains("--raw") {
+            switch await client.fetchRawUsage(accessToken: creds.accessToken) {
+            case .success(let (status, body)):
+                print("GET /usage: \(status) — raw body:")
+                print(prettyJSON(body))
+            case .failure(let error):
+                print("GET /usage: transport error — \(error)")
+            }
+            return
+        }
+
         let outcome = await client.fetchUsage(accessToken: creds.accessToken)
         switch outcome {
         case .success(let r):
@@ -276,6 +391,17 @@ enum Probe {
             print("GET /usage: 200")
             print("  session : \(fmt(snap.sessionPercent))  \(countdownString(to: snap.sessionResetsAt))")
             print("  weekly  : \(fmt(snap.weeklyPercent))  \(countdownString(to: snap.weeklyResetsAt))")
+            if snap.scopedWeekly.isEmpty {
+                print("  (no per-model weekly limits reported)")
+            }
+            for scoped in snap.scopedWeekly {
+                let name = scoped.name.padding(toLength: 8, withPad: " ", startingAt: 0)
+                print("  \(name): \(fmt(scoped.percent))  \(countdownString(to: scoped.resetsAt))")
+            }
+            let amount = snap.extraUsageAmount.map {
+                String(format: "%.\(snap.extraUsageExponent ?? 2)f %@", $0, snap.extraUsageCurrency ?? "")
+            } ?? "—"
+            print("  extra   : \(amount) (enabled: \(snap.extraUsageEnabled))")
             print("  bar shows: \(bindingMetric(snap).kind)")
         case .unauthorized:
             print("GET /usage: 401 unauthorized")
@@ -292,4 +418,16 @@ enum Probe {
     }
 
     static func fmt(_ p: Double?) -> String { p.map { "\(Int($0.rounded()))%" } ?? "—" }
+
+    /// Sorted-key pretty print so the same payload always prints the same way and
+    /// an added/renamed window is obvious in a diff. Falls back to the raw text.
+    static func prettyJSON(_ data: Data) -> String {
+        guard let obj = try? JSONSerialization.jsonObject(with: data),
+              let pretty = try? JSONSerialization.data(
+                  withJSONObject: obj, options: [.prettyPrinted, .sortedKeys]),
+              let text = String(data: pretty, encoding: .utf8) else {
+            return String(data: data, encoding: .utf8) ?? "<\(data.count) bytes, not UTF-8>"
+        }
+        return text
+    }
 }

@@ -14,8 +14,10 @@ struct UsageResponse: Decodable {
     let sevenDaySonnet: Window?
     let limits: [LimitEntry]?
     let extraUsage: ExtraUsage?
+    let spend: Spend?
 
     enum CodingKeys: String, CodingKey {
+        case spend
         case fiveHour = "five_hour"
         case sevenDay = "seven_day"
         case sevenDayOpus = "seven_day_opus"
@@ -41,12 +43,39 @@ struct LimitEntry: Decodable {
     let percent: Double?
     let resetsAt: Date?
     let isActive: Bool?
+    let scope: LimitScope?
 
     enum CodingKeys: String, CodingKey {
-        case kind, group, percent
+        case kind, group, percent, scope
         case resetsAt = "resets_at"
         case isActive = "is_active"
     }
+}
+
+/// Narrows a limit to one model. Present on `kind == "weekly_scoped"` entries —
+/// this is how per-model weekly windows are reported now that the flat
+/// `seven_day_opus` / `seven_day_sonnet` keys have gone null.
+struct LimitScope: Decodable {
+    let model: ScopedModel?
+
+    struct ScopedModel: Decodable {
+        let id: String?
+        let displayName: String?
+
+        enum CodingKeys: String, CodingKey {
+            case id
+            case displayName = "display_name"
+        }
+    }
+}
+
+/// A weekly window that applies to a single model, ready for display.
+/// `name` is the API's own `display_name` (e.g. "Fable"), so new models appear
+/// correctly labelled without a code change.
+struct ScopedWeekly: Equatable {
+    let name: String
+    let percent: Double?
+    let resetsAt: Date?
 }
 
 struct ExtraUsage: Decodable {
@@ -64,6 +93,27 @@ struct ExtraUsage: Decodable {
         case monthlyLimit = "monthly_limit"
         case currency
         case decimalPlaces = "decimal_places"
+    }
+}
+
+/// Credit spend. This is where the extra-usage amount lives now: `extra_usage`
+/// still reports `is_enabled` and `currency`, but its `used_credits` has gone
+/// null and the figure moved to `spend.used.amount_minor` (+ `exponent`).
+struct Spend: Decodable {
+    let enabled: Bool?
+    let percent: Double?
+    let used: Money?
+
+    /// A currency amount in minor units: 12345 with exponent 2 is 123.45.
+    struct Money: Decodable {
+        let amountMinor: Double?
+        let currency: String?
+        let exponent: Int?
+
+        enum CodingKeys: String, CodingKey {
+            case amountMinor = "amount_minor"
+            case currency, exponent
+        }
     }
 }
 
@@ -127,14 +177,14 @@ struct UsageSnapshot {
     var sessionResetsAt: Date?
     var weeklyPercent: Double?
     var weeklyResetsAt: Date?
-    var weeklyOpusPercent: Double?
-    var weeklyOpusResetsAt: Date?
-    var weeklySonnetPercent: Double?
-    var weeklySonnetResetsAt: Date?
+    /// Per-model weekly windows, in the order the API reports them.
+    var scopedWeekly: [ScopedWeekly]
     var extraUsageEnabled: Bool
-    var extraUsageUsedCredits: Double?
+    /// Spend in minor units (e.g. cents), scaled by `extraUsageExponent`.
+    /// Source-agnostic: filled from `spend.used` or the legacy `extra_usage`.
+    var extraUsageMinorUnits: Double?
     var extraUsageCurrency: String?
-    var extraUsageDecimalPlaces: Int?
+    var extraUsageExponent: Int?
     var status: UsageStatus
     var lastUpdated: Date?
 
@@ -142,66 +192,105 @@ struct UsageSnapshot {
          sessionResetsAt: Date? = nil,
          weeklyPercent: Double? = nil,
          weeklyResetsAt: Date? = nil,
-         weeklyOpusPercent: Double? = nil,
-         weeklyOpusResetsAt: Date? = nil,
-         weeklySonnetPercent: Double? = nil,
-         weeklySonnetResetsAt: Date? = nil,
+         scopedWeekly: [ScopedWeekly] = [],
          extraUsageEnabled: Bool = false,
-         extraUsageUsedCredits: Double? = nil,
+         extraUsageMinorUnits: Double? = nil,
          extraUsageCurrency: String? = nil,
-         extraUsageDecimalPlaces: Int? = nil,
+         extraUsageExponent: Int? = nil,
          status: UsageStatus,
          lastUpdated: Date? = nil) {
         self.sessionPercent = sessionPercent
         self.sessionResetsAt = sessionResetsAt
         self.weeklyPercent = weeklyPercent
         self.weeklyResetsAt = weeklyResetsAt
-        self.weeklyOpusPercent = weeklyOpusPercent
-        self.weeklyOpusResetsAt = weeklyOpusResetsAt
-        self.weeklySonnetPercent = weeklySonnetPercent
-        self.weeklySonnetResetsAt = weeklySonnetResetsAt
+        self.scopedWeekly = scopedWeekly
         self.extraUsageEnabled = extraUsageEnabled
-        self.extraUsageUsedCredits = extraUsageUsedCredits
+        self.extraUsageMinorUnits = extraUsageMinorUnits
         self.extraUsageCurrency = extraUsageCurrency
-        self.extraUsageDecimalPlaces = extraUsageDecimalPlaces
+        self.extraUsageExponent = extraUsageExponent
         self.status = status
         self.lastUpdated = lastUpdated
     }
 
+    /// Collects the per-model weekly windows, preferring the current representation.
+    ///
+    /// The API reports these as `limits[]` entries with `kind == "weekly_scoped"`
+    /// and the model's name under `scope.model.display_name`. The older flat
+    /// `seven_day_opus` / `seven_day_sonnet` keys now come back null, but are still
+    /// read as a fallback so an account (or a rollback) that populates them keeps
+    /// its rows. A window with no `resets_at` doesn't apply to the account — the
+    /// API sends 0% with a null reset for those — so it is dropped rather than
+    /// drawn as a permanent 0% bar.
+    static func scopedWeekly(from r: UsageResponse) -> [ScopedWeekly] {
+        var out: [ScopedWeekly] = []
+        var seen = Set<String>()
+
+        for entry in r.limits ?? [] where entry.kind == "weekly_scoped" {
+            guard let name = entry.scope?.model?.displayName, !name.isEmpty,
+                  let resetsAt = entry.resetsAt else { continue }
+            if seen.insert(name).inserted {
+                out.append(ScopedWeekly(name: name, percent: entry.percent, resetsAt: resetsAt))
+            }
+        }
+
+        for (name, window) in [("Opus", r.sevenDayOpus), ("Sonnet", r.sevenDaySonnet)] {
+            guard let window, let resetsAt = window.resetsAt else { continue }
+            if seen.insert(name).inserted {
+                out.append(ScopedWeekly(name: name, percent: window.utilization, resetsAt: resetsAt))
+            }
+        }
+        return out
+    }
+
+    /// The spend amount and the exponent that scales it, taken from a single
+    /// source. Prefer `spend.used`; fall back to the legacy `extra_usage` fields.
+    ///
+    /// Amount and exponent are read as a pair on purpose — pairing an amount from
+    /// one shape with an exponent from the other is exactly how a figure ends up
+    /// off by a factor of 100.
+    static func extraUsageMoney(from r: UsageResponse) -> (minor: Double?, exponent: Int?, currency: String?) {
+        if let used = r.spend?.used, let amount = used.amountMinor {
+            return (amount, used.exponent, used.currency ?? r.extraUsage?.currency)
+        }
+        return (r.extraUsage?.usedCredits, r.extraUsage?.decimalPlaces, r.extraUsage?.currency)
+    }
+
     static func from(_ r: UsageResponse, status: UsageStatus = .ok, now: Date = Date()) -> UsageSnapshot {
         func limit(_ kind: String) -> LimitEntry? { r.limits?.first { $0.kind == kind } }
+        let money = extraUsageMoney(from: r)
         return UsageSnapshot(
             sessionPercent: r.fiveHour?.utilization ?? limit("session")?.percent,
             sessionResetsAt: r.fiveHour?.resetsAt ?? limit("session")?.resetsAt,
             weeklyPercent: r.sevenDay?.utilization ?? limit("weekly_all")?.percent,
             weeklyResetsAt: r.sevenDay?.resetsAt ?? limit("weekly_all")?.resetsAt,
-            weeklyOpusPercent: r.sevenDayOpus?.utilization,
-            weeklyOpusResetsAt: r.sevenDayOpus?.resetsAt,
-            weeklySonnetPercent: r.sevenDaySonnet?.utilization,
-            weeklySonnetResetsAt: r.sevenDaySonnet?.resetsAt,
-            extraUsageEnabled: r.extraUsage?.isEnabled ?? false,
-            extraUsageUsedCredits: r.extraUsage?.usedCredits,
-            extraUsageCurrency: r.extraUsage?.currency,
-            extraUsageDecimalPlaces: r.extraUsage?.decimalPlaces,
+            scopedWeekly: scopedWeekly(from: r),
+            extraUsageEnabled: r.spend?.enabled ?? r.extraUsage?.isEnabled ?? false,
+            extraUsageMinorUnits: money.minor,
+            extraUsageCurrency: money.currency,
+            extraUsageExponent: money.exponent,
             status: status,
             lastUpdated: now)
     }
 }
 
 extension UsageSnapshot {
-    /// Extra-usage spend in whole currency units. The API reports `used_credits`
-    /// in minor units (e.g. cents) alongside `decimal_places`; 4402 credits at
-    /// 2 places is 44.02 EUR — NOT 4402. Defaults to 2 places when the API omits
-    /// the field (every observed currency response has sent it).
+    /// Extra-usage spend in whole currency units. The API reports the figure in
+    /// minor units (e.g. cents) alongside the exponent that places the point:
+    /// 4402 at exponent 2 is 44.02 EUR — NOT 4402. Defaults to 2 when the API
+    /// omits the exponent (every observed currency response has sent it).
     var extraUsageAmount: Double? {
-        guard let credits = extraUsageUsedCredits else { return nil }
-        return credits / pow(10.0, Double(extraUsageDecimalPlaces ?? 2))
+        guard let minor = extraUsageMinorUnits else { return nil }
+        return minor / pow(10.0, Double(extraUsageExponent ?? 2))
     }
 }
 
 // MARK: - Display logic
 
-enum BarKind { case session, weekly }
+/// Identifies a usage window. `.scoped` carries the model's display name, so a
+/// per-model weekly limit can be alerted on without a case per model.
+/// `bindingMetric` never returns `.scoped` — the menu-bar ring still tracks only
+/// the session and the all-models weekly window.
+enum BarKind: Equatable { case session, weekly, scoped(String) }
 
 struct BarDisplay {
     let kind: BarKind

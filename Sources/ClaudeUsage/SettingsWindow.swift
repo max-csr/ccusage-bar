@@ -69,7 +69,7 @@ struct SettingsView: View {
                             .frame(width: 44, alignment: .trailing)
                     }
                     .disabled(!model.thresholdEnabled)
-                    Text("Notify when session or weekly usage reaches this level.")
+                    Text("Notify when your session, or any weekly limit, reaches this level.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }

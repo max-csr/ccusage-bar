@@ -101,11 +101,13 @@ struct PopoverView: View {
                      percent: snap.weeklyPercent,
                      resetsAt: snap.weeklyResetsAt,
                      now: now)
-            if let opus = snap.weeklyOpusPercent, snap.weeklyOpusResetsAt != nil {
-                LimitRow(title: "Opus", percent: opus, resetsAt: snap.weeklyOpusResetsAt, now: now)
-            }
-            if let sonnet = snap.weeklySonnetPercent, snap.weeklySonnetResetsAt != nil {
-                LimitRow(title: "Sonnet", percent: sonnet, resetsAt: snap.weeklySonnetResetsAt, now: now)
+            // One row per per-model weekly window (Fable, Opus, …), labelled and
+            // ordered by the API. Empty for accounts with no scoped limits.
+            ForEach(snap.scopedWeekly, id: \.name) { scoped in
+                LimitRow(title: scoped.name,
+                         percent: scoped.percent,
+                         resetsAt: scoped.resetsAt,
+                         now: now)
             }
         }
     }
@@ -127,7 +129,7 @@ struct PopoverView: View {
             return "No extra usage yet this period."
         }
         let currency = snap.extraUsageCurrency ?? ""
-        let places = snap.extraUsageDecimalPlaces ?? 2
+        let places = snap.extraUsageExponent ?? 2
         let value = String(format: "%.\(places)f", amount)
         return "\(value) \(currency) used this period.".trimmingCharacters(in: .whitespaces)
     }

@@ -30,7 +30,7 @@ final class UsageClient {
         self.session = URLSession(configuration: cfg)
     }
 
-    func fetchUsage(accessToken: String) async -> FetchOutcome {
+    private func usageRequest(accessToken: String) -> URLRequest {
         var req = URLRequest(url: usageURL)
         req.httpMethod = "GET"
         req.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
@@ -39,9 +39,27 @@ final class UsageClient {
         // User-Agent is effectively required: omitting it risks persistent 429s.
         req.setValue(userAgent, forHTTPHeaderField: "User-Agent")
         req.setValue("application/json", forHTTPHeaderField: "Accept")
+        return req
+    }
 
+    /// The undecoded response body, for `--probe --raw`. `UsageResponse` silently
+    /// drops any key it doesn't declare, so this is the only way to discover a
+    /// window the app doesn't model yet (e.g. a newly-named per-model weekly limit).
+    func fetchRawUsage(accessToken: String) async -> Result<(status: Int, body: Data), Error> {
         do {
-            let (data, resp) = try await session.data(for: req)
+            let (data, resp) = try await session.data(for: usageRequest(accessToken: accessToken))
+            guard let http = resp as? HTTPURLResponse else {
+                return .failure(URLError(.badServerResponse))
+            }
+            return .success((http.statusCode, data))
+        } catch {
+            return .failure(error)
+        }
+    }
+
+    func fetchUsage(accessToken: String) async -> FetchOutcome {
+        do {
+            let (data, resp) = try await session.data(for: usageRequest(accessToken: accessToken))
             guard let http = resp as? HTTPURLResponse else {
                 return .transport(URLError(.badServerResponse))
             }
