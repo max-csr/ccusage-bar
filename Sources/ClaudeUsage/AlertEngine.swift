@@ -26,6 +26,8 @@ extension BarKind {
         switch self {
         case .session: return "session"
         case .weekly:  return "weekly"
+        // Doubles as the notification's dedupe id, so it must be stable per model.
+        case .scoped(let name): return "weekly.\(name.lowercased())"
         }
     }
 }
@@ -114,6 +116,9 @@ struct AlertEngine {
 
     private var session = WindowState()
     private var weekly = WindowState()
+    /// One latch per per-model weekly window, keyed by display name. Grown on
+    /// demand so a model appearing mid-session gets its own independent latch.
+    private var scoped: [String: WindowState] = [:]
     private var sessionSamples: [Sample] = []
     private var lastBurnFire: Date?
     private var lastProcessed: Date?
@@ -132,6 +137,7 @@ struct AlertEngine {
             lastThreshold = settings.thresholdPercent
             session.rearmForThreshold(settings.thresholdPercent)
             weekly.rearmForThreshold(settings.thresholdPercent)
+            for key in scoped.keys { scoped[key]?.rearmForThreshold(settings.thresholdPercent) }
         }
 
         var alerts: [Alert] = []
@@ -146,6 +152,15 @@ struct AlertEngine {
         if let wp = snap.weeklyPercent {
             let (alert, _) = weekly.step(.weekly, percent: wp,
                 resetsAt: snap.weeklyResetsAt, settings: settings, config: config)
+            if let alert { alerts.append(alert) }
+        }
+        // Per-model weekly windows latch independently, reusing the same rule.
+        for window in snap.scopedWeekly {
+            guard let percent = window.percent else { continue }
+            var state = scoped[window.name] ?? WindowState()
+            let (alert, _) = state.step(.scoped(window.name), percent: percent,
+                resetsAt: window.resetsAt, settings: settings, config: config)
+            scoped[window.name] = state
             if let alert { alerts.append(alert) }
         }
 

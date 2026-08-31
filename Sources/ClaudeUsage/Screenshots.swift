@@ -25,6 +25,8 @@ enum Screenshots {
             sessionResetsAt: now.addingTimeInterval(30 * 60),
             weeklyPercent: 56,
             weeklyResetsAt: now.addingTimeInterval((2 * 24 + 8) * 3600),
+            scopedWeekly: [ScopedWeekly(name: "Fable", percent: 31,
+                                        resetsAt: now.addingTimeInterval((2 * 24 + 8) * 3600))],
             extraUsageEnabled: false,
             status: .ok,
             lastUpdated: now.addingTimeInterval(-55))

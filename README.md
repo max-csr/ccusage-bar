@@ -12,6 +12,8 @@ reached" never catches you mid‑task.
 
 - A live **usage ring + %** in the menu bar — green when you've got room, shading to red as it fills.
 - A click‑away panel with your **5‑hour session**, **weekly limits**, and exact **reset countdowns**.
+- **Per‑model weekly limits** — when your plan has a separate weekly allowance for a
+  specific model (Fable, say), it gets its own bar, labelled and ordered by the API.
 - **Usage notifications** — a heads‑up when your session or weekly usage crosses a level you choose (default 90%), or when your 5‑hour session is burning down unusually fast. Both optional.
 - **Launch at login**, one‑click **refresh**, and a built‑in **check for updates**.
 - Tiny and native — about 17 MB, one process, no Electron.
@@ -44,8 +46,9 @@ one running low, it automatically switches to show that instead (marked `W`).
 
 So a limit never catches you mid‑task, CC Usage can alert you:
 
-- **Threshold alerts** — fire once when your **session** or **weekly** usage reaches a
-  level you set (default 90%, adjustable from 50–99% with a slider).
+- **Threshold alerts** — fire once when your **session** or any **weekly** limit —
+  including a per‑model one — reaches a level you set (default 90%, adjustable from
+  50–99% with a slider). Each limit alerts independently.
 - **Rapid‑usage alerts** — a heads‑up when your 5‑hour session is being used up
   unusually fast, well before you hit the wall.
 
@@ -85,6 +88,7 @@ Quick checks while developing:
 swift build
 .build/debug/ClaudeUsage --selftest       # offline sanity checks
 .build/debug/ClaudeUsage --probe          # one live usage fetch, printed
+.build/debug/ClaudeUsage --probe --raw    # the undecoded response, to spot new fields
 .build/debug/ClaudeUsage --check-update    # compare against the latest release
 ```
 

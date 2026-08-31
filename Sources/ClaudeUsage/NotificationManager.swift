@@ -79,6 +79,11 @@ final class NotificationManager {
                 content.title = "Weekly usage at \(pct)%"
                 content.body = "You've used \(pct)% of your weekly limit. "
                     + countdownString(to: snapshot.weeklyResetsAt) + "."
+            case .scoped(let name):
+                let resetsAt = snapshot.scopedWeekly.first { $0.name == name }?.resetsAt
+                content.title = "\(name) weekly usage at \(pct)%"
+                content.body = "You've used \(pct)% of your weekly \(name) limit. "
+                    + countdownString(to: resetsAt) + "."
             }
             identifier = "threshold.\(kind.label)"
 
